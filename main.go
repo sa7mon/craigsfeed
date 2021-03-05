@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"github.com/PuerkitoBio/goquery"
 	"github.com/gorilla/feeds"
+	"github.com/gorilla/mux"
+	"github.com/sa7mon/craigsfeed/data"
 	"log"
 	"net/http"
 	"strings"
@@ -14,13 +16,17 @@ import (
 
 func main() {
 	var searchURL string
+	var scrapeInterval int
 	flag.StringVar(&searchURL, "url", "", "URL of Craigslist search")
+	flag.IntVar(&scrapeInterval, "interval", 120, "Minutes to wait between scrapes")
 	//flag.BoolVar(&verbose, "verbose", false, "Verbose mode")
 	flag.Parse()
 
 	if searchURL == "" {
 		panic("Need a valid URL")
 	}
+
+	manager := data.GetManager()
 
 	s := NewScraper(searchURL)
 	rssItems, err := s.Scrape()
@@ -38,11 +44,35 @@ func main() {
 		Items: rssItems,
 	}
 
-	rss, err := feed.ToRss()
-	if err != nil {
-		log.Fatal(err)
+	manager.CurrentFeed = feed
+
+	r := mux.NewRouter()
+	r.HandleFunc("/rss", RSSHandler)
+
+	srv := &http.Server{
+		Handler:      r,
+		Addr:         "127.0.0.1:8000",
+		// Good practice: enforce timeouts for servers you create!
+		WriteTimeout: 15 * time.Second,
+		ReadTimeout:  15 * time.Second,
 	}
-	fmt.Println(rss)
+
+	// Spin off scraper to its own thread
+	go s.ScrapeLoop(2)
+
+	log.Println("[server] Serving on 127.0.0.1:8000")
+	log.Fatal(srv.ListenAndServe())
+}
+
+func RSSHandler(w http.ResponseWriter, r *http.Request) {
+	manager := data.GetManager()
+	rss, err := manager.CurrentFeed.ToRss()
+	if err != nil {
+		panic(err)
+	}
+	w.Header().Set("Content-Type", "application/rss+xml")
+	w.WriteHeader(http.StatusOK)
+	w.Write([]byte(rss))
 }
 
 type scraper struct {
@@ -52,6 +82,29 @@ type scraper struct {
 
 func NewScraper(url string) scraper {
 	return scraper{searchURL: url}
+}
+
+/*
+	interval - Time to sleep between scrapes in minutes
+ */
+func (sc scraper) ScrapeLoop(interval int) {
+	keepScraping := true
+	sleepInterval := time.Duration(interval) * time.Minute
+	manager := data.GetManager()
+	var scrapeError error
+
+	for keepScraping {
+		time.Sleep(sleepInterval)
+		log.Printf("[scraper] Starting scrape")
+		items, err := sc.Scrape()
+		if err != nil {
+			scrapeError = err
+			keepScraping = false
+			continue
+		}
+		manager.CurrentFeed.Items = items
+	}
+	log.Printf("[scraper] Thread dying due to error: %v", scrapeError)
 }
 
 func (sc scraper) Scrape() ([]*feeds.Item, error) {
