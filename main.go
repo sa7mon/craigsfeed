@@ -10,6 +10,7 @@ import (
 	"github.com/sa7mon/craigsfeed/data"
 	"log"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 )
@@ -19,13 +20,14 @@ func main() {
 	var scrapeInterval int
 	flag.StringVar(&searchURL, "url", "", "URL of Craigslist search")
 	flag.IntVar(&scrapeInterval, "interval", 120, "Minutes to wait between scrapes")
-	//flag.BoolVar(&verbose, "verbose", false, "Verbose mode")
 	flag.Parse()
 
 	if searchURL == "" {
-		panic("Need a valid URL")
+		log.Println("Error: argument 'url' is required")
+		os.Exit(1)
 	}
 
+	log.Printf("[main] Scraping URL %v every %v minutes", searchURL, scrapeInterval)
 	manager := data.GetManager()
 
 	s := NewScraper(searchURL)
@@ -51,8 +53,7 @@ func main() {
 
 	srv := &http.Server{
 		Handler:      r,
-		Addr:         "127.0.0.1:8000",
-		// Good practice: enforce timeouts for servers you create!
+		Addr:         ":8000",
 		WriteTimeout: 15 * time.Second,
 		ReadTimeout:  15 * time.Second,
 	}
@@ -60,7 +61,7 @@ func main() {
 	// Spin off scraper to its own thread
 	go s.ScrapeLoop(2)
 
-	log.Println("[server] Serving on 127.0.0.1:8000")
+	log.Printf("[server] Serving on %v", srv.Addr)
 	log.Fatal(srv.ListenAndServe())
 }
 
@@ -129,7 +130,6 @@ func (sc scraper) Scrape() ([]*feeds.Item, error) {
 
 	var parsedItems []*feeds.Item
 
-	// Find the review items
 	doc.Find("ul.rows li").Each(func(i int, s *goquery.Selection) {
 		title := s.Find("a.result-title").Text()
 		pageTime, timeExists := s.Find("time.result-date").Attr("title")
