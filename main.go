@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -36,20 +37,21 @@ func main() {
 		panic(err)
 	}
 	now := time.Now()
-	searchQuery := searchURL[strings.Index(searchURL, "?query=")+7:strings.Index(searchURL, "&")]
+	searchQuery := searchURL[strings.Index(searchURL, "?query=")+7 : strings.Index(searchURL, "&")]
 	feed := &feeds.Feed{
 		Title:       "Craigslist Search",
 		Link:        &feeds.Link{Href: ""},
 		Description: fmt.Sprintf("Craigslist search for '%v'", searchQuery),
 		Author:      &feeds.Author{Name: "", Email: ""},
 		Created:     now,
-		Items: rssItems,
+		Items:       rssItems,
 	}
 
 	manager.CurrentFeed = feed
 
 	r := mux.NewRouter()
 	r.HandleFunc("/rss", RSSHandler)
+	r.HandleFunc("/health", HealthHandler)
 
 	srv := &http.Server{
 		Handler:      r,
@@ -59,7 +61,7 @@ func main() {
 	}
 
 	// Spin off scraper to its own thread
-	go s.ScrapeLoop(2)
+	go s.ScrapeLoop(scrapeInterval)
 
 	log.Printf("[server] Serving on %v", srv.Addr)
 	log.Fatal(srv.ListenAndServe())
@@ -76,6 +78,26 @@ func RSSHandler(w http.ResponseWriter, r *http.Request) {
 	w.Write([]byte(rss))
 }
 
+func HealthHandler(w http.ResponseWriter, r *http.Request) {
+	data.GetManager().Lock.Lock()
+	e := data.GetManager().Error
+	data.GetManager().Lock.Unlock()
+
+	if e == nil {
+		w.WriteHeader(200)
+		w.Write([]byte("Ok"))
+		return
+	}
+	marshaled, err := json.Marshal(e)
+	if err != nil {
+		w.WriteHeader(500)
+		w.Write([]byte(err.Error()))
+		return
+	}
+	w.WriteHeader(400)
+	w.Write(marshaled)
+}
+
 type scraper struct {
 	searchURL string
 	feedItems []feeds.Item
@@ -87,25 +109,22 @@ func NewScraper(url string) scraper {
 
 /*
 	interval - Time to sleep between scrapes in minutes
- */
+*/
 func (sc scraper) ScrapeLoop(interval int) {
-	keepScraping := true
-	sleepInterval := time.Duration(interval) * time.Minute
 	manager := data.GetManager()
-	var scrapeError error
 
-	for keepScraping {
-		time.Sleep(sleepInterval)
+	for {
 		log.Printf("[scraper] Starting scrape")
 		items, err := sc.Scrape()
 		if err != nil {
-			scrapeError = err
-			keepScraping = false
-			continue
+			manager.SetError(err)
+		} else {
+			log.Printf("scrape successful")
+			manager.ClearError()
+			manager.CurrentFeed.Items = items
 		}
-		manager.CurrentFeed.Items = items
+		time.Sleep(time.Duration(interval) * time.Minute)
 	}
-	log.Printf("[scraper] Thread dying due to error: %v", scrapeError)
 }
 
 func (sc scraper) Scrape() ([]*feeds.Item, error) {
@@ -121,7 +140,7 @@ func (sc scraper) Scrape() ([]*feeds.Item, error) {
 	// Load the HTML document
 	doc, err := goquery.NewDocumentFromReader(res.Body)
 	if err != nil {
-		log.Fatal(err)
+		return nil, err
 	}
 	err = res.Body.Close()
 	if err != nil {
@@ -137,7 +156,7 @@ func (sc scraper) Scrape() ([]*feeds.Item, error) {
 			log.Println("Couldn't find time")
 			pageTime = ""
 		}
-		timeParsed, err := time.Parse("2006 Mon 02 Jan 04:04:05 PM", "2021 " + pageTime) // Todo add current year instead of hardcode
+		timeParsed, err := time.Parse("2006 Mon 02 Jan 04:04:05 PM", "2021 "+pageTime) // Todo add current year instead of hardcode
 		if err != nil {
 			log.Println(err)
 		}
