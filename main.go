@@ -156,7 +156,7 @@ func (sc scraper) Scrape() ([]*feeds.Item, error) {
 			log.Println("Couldn't find time")
 			pageTime = ""
 		}
-		timeParsed, err := time.Parse("2006 Mon 02 Jan 04:04:05 PM", "2021 "+pageTime) // Todo add current year instead of hardcode
+		timeParsed, err := time.Parse("2006 Mon 02 Jan 04:04:05 PM", fmt.Sprintf("%d %v", time.Now().Year(), pageTime))
 		if err != nil {
 			log.Println(err)
 		}
@@ -169,7 +169,7 @@ func (sc scraper) Scrape() ([]*feeds.Item, error) {
 
 		var item feeds.Item
 		item = feeds.Item{
-			Title:       title,
+			Title:       fmt.Sprintf("%v | %v", title, price),
 			Created:     timeParsed,
 			Link:        &feeds.Link{Href: resultLink},
 			Description: fmt.Sprintf("%v | %v | %v", title, price, location),
